@@ -4,10 +4,11 @@ import ts from 'typescript';
 import {
   strLit,
   quoteKey,
-  smRecord,
+  unionRecord,
   vmRecord,
   schemaBody,
-  enumTypeString,
+  enumPropTypeString,
+  collectEnums,
   viewModelRefTypeString,
   type Schema,
 } from '../rive-gen-types.ts';
@@ -27,8 +28,8 @@ describe('emit escaping', () => {
     expect(quoteKey('Identifier_1', true)).toBe("'Identifier_1'");
   });
 
-  test('smRecord escapes artboard and state machine names', () => {
-    const out = smRecord({ "Art'board": ["State'Machine"] });
+  test('unionRecord escapes keys and values', () => {
+    const out = unionRecord({ "Art'board": ["State'Machine"] });
     expect(out).toBe("    'Art\\'board': 'State\\'Machine';");
   });
 
@@ -45,14 +46,17 @@ describe('emit escaping', () => {
       artboards: ["O'Brien", 'back\\slash'],
       defaultArtboard: "O'Brien",
       stateMachines: { "O'Brien": ["It's SM"], 'back\\slash': [] },
+      enums: { "Pet's": ["cat's", 'a|b'] },
       viewModels: {
-        "It's VM": { "quote'": "enum:a'b" },
+        "It's VM": { "quote'": "enum:Pet's" },
       },
     };
     const body = schemaBody(schema);
     expect(parseErrors(`declare const asset: {\n${body}\n};`)).toEqual([]);
     expect(body).toContain("'O\\'Brien'");
     expect(body).toContain("'back\\\\slash'");
+    // Named enums carry '|' inside a real union member, no encoding hazard.
+    expect(body).toContain("'Pet\\'s': 'cat\\'s' | 'a|b';");
 
     // Unescaped, the same names produce a syntactically broken declaration —
     // this is what the generator used to emit.
@@ -78,11 +82,19 @@ describe('schemaBody', () => {
     artboards: ['Main'],
     defaultArtboard: 'Main',
     stateMachines: { Main: ['SM'] },
+    enums: {},
     viewModels: {},
   };
 
   test('always emits viewModels, empty object when none', () => {
     expect(schemaBody(base)).toContain('viewModels: {};');
+  });
+
+  test('always emits enums, empty object when none', () => {
+    expect(schemaBody(base)).toContain('enums: {};');
+    expect(schemaBody({ ...base, enums: { Pets: ['cat'] } })).toContain(
+      "  enums: {\n    Pets: 'cat';\n  };"
+    );
   });
 
   test('emits viewModels record when present', () => {
@@ -95,17 +107,60 @@ describe('schemaBody', () => {
   });
 });
 
-describe('enumTypeString', () => {
-  test('joins values with |', () => {
-    expect(enumTypeString('p', ['a', 'b'])).toBe('enum:a|b');
+describe('unionRecord', () => {
+  test('emits one union per key, never for an empty list', () => {
+    expect(unionRecord({ Pets: ['cat', 'dog'], Empty: [] })).toBe(
+      "    Pets: 'cat' | 'dog';\n    Empty: never;"
+    );
+  });
+});
+
+describe('enumPropTypeString', () => {
+  const enums = { Pets: ['cat', 'dog'] };
+  test('references the file-level enum when enumName is known', () => {
+    expect(
+      enumPropTypeString(
+        { name: 'pet', type: 'enumType', enumName: 'Pets' },
+        enums
+      )
+    ).toBe('enum:Pets');
+  });
+  test('is untyped without an enumName (built-in enums)', () => {
+    expect(enumPropTypeString({ name: 'pet', type: 'enumType' }, enums)).toBe(
+      'enum'
+    );
+  });
+  test('is untyped when enumName is not a file enum', () => {
+    expect(
+      enumPropTypeString(
+        { name: 'pet', type: 'enumType', enumName: 'Nope' },
+        enums
+      )
+    ).toBe('enum');
+  });
+});
+
+describe('collectEnums', () => {
+  test('skips the unnamed built-in enums the runtime lists', () => {
+    const file = {
+      enums: () => [
+        { name: '', values: ['screen', 'normal'] },
+        { name: 'Status', values: ['idle'] },
+      ],
+    };
+    expect(collectEnums(file)).toEqual({ Status: ['idle'] });
   });
 
-  test('empty values fall back to untyped enum', () => {
-    expect(enumTypeString('p', [])).toBe('enum');
-  });
-
-  test("a value containing the '|' separator falls back to untyped enum", () => {
-    expect(enumTypeString('p', ['a|b', 'c'])).toBe('enum');
+  test('keeps an enum named __proto__ as an own key', () => {
+    const file = { enums: () => [{ name: '__proto__', values: ['a'] }] };
+    const enums = collectEnums(file);
+    expect(Object.keys(enums)).toEqual(['__proto__']);
+    expect(
+      enumPropTypeString(
+        { name: 'p', type: 'enumType', enumName: '__proto__' },
+        enums
+      )
+    ).toBe('enum:__proto__');
   });
 });
 

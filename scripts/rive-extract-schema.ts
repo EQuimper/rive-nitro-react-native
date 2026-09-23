@@ -13,7 +13,13 @@ import { readFileSync } from 'fs';
 // loader cannot statically see its named exports (bun's interop can).
 import riveCanvas from '@rive-app/canvas';
 const { RuntimeLoader } = riveCanvas;
-import { enumTypeString, viewModelRefTypeString } from './rive-gen-types.ts';
+import {
+  collectEnums,
+  enumPropTypeString,
+  nameMap,
+  viewModelRefTypeString,
+  type RuntimeProperty,
+} from './rive-gen-types.ts';
 
 // noUncheckedIndexedAccess: process.argv destructuring yields string | undefined
 const input: string | undefined = process.argv[2];
@@ -88,7 +94,7 @@ async function main() {
   }
 
   const artboards: string[] = [];
-  const stateMachines: Record<string, string[]> = {};
+  const stateMachines = nameMap<string[]>();
   for (let i = 0; i < riveFile.artboardCount(); i++) {
     const artboard = riveFile.artboardByIndex(i);
     artboards.push(artboard.name);
@@ -99,27 +105,21 @@ async function main() {
     stateMachines[artboard.name] = sms;
   }
 
-  const viewModels: Record<string, Record<string, string>> = {};
+  const enums = collectEnums(riveFile);
+
+  const viewModels = nameMap<Record<string, string>>();
   const vmCount = (riveFile as any).viewModelCount() as number;
   for (let i = 0; i < vmCount; i++) {
     const vm = (riveFile as any).viewModelByIndex(i);
-    const properties = vm.getProperties() as Array<{
-      name: string;
-      type: string;
-    }>;
+    const properties = vm.getProperties() as RuntimeProperty[];
     // Create a blank instance to resolve viewModel property references
     const inst = vm.instance?.() as any;
-    const props: Record<string, string> = {};
+    const props = nameMap<string>();
     for (const p of properties) {
       if (p.type === 'viewModel') {
         props[p.name] = viewModelRefTypeString(inst, p.name);
-      } else if (p.type === 'enumType' && inst) {
-        try {
-          const ep = inst.enum?.(p.name);
-          props[p.name] = enumTypeString(p.name, ep?.values ?? []);
-        } catch {
-          props[p.name] = 'enum';
-        }
+      } else if (p.type === 'enumType') {
+        props[p.name] = enumPropTypeString(p, enums);
       } else {
         props[p.name] = p.type;
       }
@@ -130,7 +130,7 @@ async function main() {
   const defaultArtboard = artboards[0] ?? '';
   process.stdout.write(
     JSON.stringify(
-      { artboards, defaultArtboard, stateMachines, viewModels },
+      { artboards, defaultArtboard, stateMachines, enums, viewModels },
       null,
       2
     ) + '\n'

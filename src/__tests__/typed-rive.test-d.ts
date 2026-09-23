@@ -10,6 +10,8 @@ import type {
   TypedViewModelInstance,
   TypedViewModelEnumProperty,
   UntypedViewModelInstance,
+  EnumValues,
+  EnumValuesOf,
 } from '../../src/core/TypedViewModelInstance';
 import type {
   ViewModelInstance,
@@ -230,7 +232,8 @@ expectError(
 
 // --- Enum property ---
 
-// pegVM.pegType is 'enum:normal|multiplier' — returns typed enum property
+// pegVM.pegType is 'enum:pegType', resolved through the file's enums —
+// returns typed enum property
 expectAssignable<
   TypedViewModelEnumProperty<'normal' | 'multiplier'> | undefined
 >(storeVM.viewModel('property of pegVM')?.enumProperty('pegType'));
@@ -246,6 +249,47 @@ pegTypeProp.set('normal');
 expectType<Promise<void>>(pegTypeProp.setValueAsync('multiplier'));
 expectError(pegTypeProp.set('bogus'));
 expectError(pegTypeProp.setValueAsync('bogus'));
+
+// --- Named enums are addressable by name ---
+
+expectType<'normal' | 'multiplier'>(
+  null as unknown as EnumValues<typeof blinkoRiv, 'pegType'>
+);
+expectType<'Coin' | 'Gem'>(
+  null as unknown as EnumValues<typeof rewardsRiv, 'Item_Selection'>
+);
+expectError(null as unknown as EnumValues<typeof rewardsRiv, 'NotAnEnum'>);
+
+// An untyped 'enum' property (a built-in enum) accepts any string.
+type BuiltInEnumSchema = {
+  artboards: 'Main';
+  defaultArtboard: 'Main';
+  stateMachines: { Main: 'SM' };
+  enums: {};
+  viewModels: { VM: { blend: 'enum' } };
+};
+declare const builtInVM: TypedViewModelInstance<BuiltInEnumSchema, 'VM'>;
+expectType<UseRivePropertyResult<string>>(useRiveEnum('blend', builtInVM));
+
+// A named reference missing from `enums` is never — not the enum's name.
+type DanglingSchema = {
+  artboards: 'Main';
+  defaultArtboard: 'Main';
+  stateMachines: { Main: 'SM' };
+  enums: {};
+  viewModels: { VM: { pet: 'enum:Pets' } };
+};
+expectType<never>(null as unknown as EnumValuesOf<DanglingSchema, 'enum:Pets'>);
+
+// An enum with no values degrades to an untyped (string) property.
+type EmptyEnumSchema = {
+  artboards: 'Main';
+  defaultArtboard: 'Main';
+  stateMachines: { Main: 'SM' };
+  enums: { E: never };
+  viewModels: { VM: { pet: 'enum:E' } };
+};
+expectType<string>(null as unknown as EnumValuesOf<EmptyEnumSchema, 'enum:E'>);
 
 // Non-enum property rejected for enumProperty()
 expectError(storeVM.enumProperty('xbuttonClick'));
